@@ -1,0 +1,31 @@
+2-Week Pro Roadmap (Scope Cut)
+
+Week 1: Monetization + Auto-Progression MVP
+- Feature flags + Pro gate
+	- Table: subscriptions (user_id, plan, status, started_at, ends_at)
+	- Helper: isPro(userId) in API layer
+	- UI: lock icons + Upgrade CTA on workout/meal screens
+	- Prompt: EXTEND hệ thống hiện có để thêm feature flags + Pro gate. Giữ nguyên kiến trúc Next.js App Router, services/, app/api/, types/, Supabase RLS. Thêm bảng subscriptions, helper isPro trong layer service/api, và UI lock + Upgrade CTA trên workout/meal. Không tạo app mới, không đổi flow hiện tại.
+- Auto-progression (basic)
+	- Rule: if last 2 sessions hit target reps, suggest +2.5% weight
+	- Service: progression.ts (pure calc)
+	- API: GET /api/workout/progression?exerciseName=...
+	- UI: show “Next session weight” on workout planner
+	- Prompt: EXTEND hệ thống để thêm auto-progression. Dùng log hiện có trong workout_sets. Thêm service progression.ts tính gợi ý tạ (+2.5% khi đạt reps 2 buổi). Thêm API GET /api/workout/progression và hiển thị “Next session weight” trong workout planner. Giữ nguyên cấu trúc file và style hiện có.
+
+Week 2: Training Cycle Lite + Insights
+- Training cycle lite (4-week only)
+	- Model: training_cycles + cycle_weeks (week_number, focus, target_reps)
+	- API: POST /api/training-cycles
+	- UI: week selector + session list
+	- Prompt: EXTEND hệ thống để thêm training cycle 4 tuần. Tạo bảng training_cycles + cycle_weeks trong Supabase schema và RLS. Thêm API POST /api/training-cycles và UI chọn tuần + danh sách buổi. Không thay đổi các service/workout hiện tại, chỉ bổ sung.
+- Insights (lightweight)
+	- PR detection: max weight per exercise
+	- Volume trend: sum(sets * reps * weight)
+	- UI: small chart + CSV export
+	- Prompt: EXTEND hệ thống để thêm insights. Tính PR theo bài tập (max weight) và volume trend (sum sets*reps*weight) từ workout_sets. Thêm UI chart nhỏ và export CSV. Không tạo module mới ngoài cấu trúc services/, app/api/, components/.
+
+Out of scope (post-2 weeks)
+- Meal plan advanced filters
+- Notifications/streaks
+- Coach plan / multi-user
