@@ -10,7 +10,7 @@
     ]
   },
   "instructions": [
-    "AGENTS.md",
+    "docs/AGENTS.md",
     ".agent/AGENTS.md",
     ".opencode/skills/ecc/coding-standards/SKILL.md",
     ".opencode/skills/ecc/backend-patterns/SKILL.md",

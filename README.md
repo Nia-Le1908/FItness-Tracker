@@ -108,7 +108,7 @@ Chuỗi migration SQL trong `supabase/` (áp dụng theo thứ tự):
 | `20260720_user_goals_rls.sql` | RLS cho user_goals |
 | `seed.sql` | Seed data |
 
-Chi tiết từng bảng: xem [ARCHITECTURE.md §4](./ARCHITECTURE.md#4-database-schema-supabase-postgresql).
+Chi tiết từng bảng: xem [docs/security/SECURITY_AUDIT.md](./docs/security/SECURITY_AUDIT.md) (schema đầy đủ nằm trong tài liệu nội bộ, không public).
 
 ---
 
@@ -138,7 +138,7 @@ Chi tiết từng bảng: xem [ARCHITECTURE.md §4](./ARCHITECTURE.md#4-database
 - **Admin-only** (9): users CRUD, audit-logs, summary, observability (raw + aggregated), bulk-actions, system-controls.
 - **Webhook/Cron** (2): PayOS webhook (HMAC), notifications cron (`Bearer CRON_SECRET`).
 
-Catalog đầy đủ: [ARCHITECTURE.md §5](./ARCHITECTURE.md#5-api-endpoints-catalog).
+Catalog đầy đủ: nằm trong tài liệu kiến trúc nội bộ (không public).
 
 ---
 
@@ -192,7 +192,7 @@ npm run dev                  # http://localhost:3000
 
 ## Tài liệu tham khảo
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — kiến trúc chi tiết, schema, endpoint catalog, migration checklist
+- [docs/security/SECURITY_AUDIT.md](./docs/security/SECURITY_AUDIT.md) — audit OWASP Top 10 + changelog fix (tài liệu kiến trúc chi tiết là nội bộ, không public)
 - [docs/security/SECURITY_AUDIT.md](./docs/security/SECURITY_AUDIT.md) — audit OWASP Top 10 + changelog fix
 - [lab/](./lab/README.md) — môi trường lab pentest (docker-compose Kali + Supabase local, 9 module)
 
