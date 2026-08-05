@@ -192,9 +192,7 @@ npm run dev                  # http://localhost:3000
 
 ## Tài liệu tham khảo
 
-- [docs/security/SECURITY_AUDIT.md](./docs/security/SECURITY_AUDIT.md) — audit OWASP Top 10 + changelog fix (tài liệu kiến trúc chi tiết là nội bộ, không public)
-- [docs/security/SECURITY_AUDIT.md](./docs/security/SECURITY_AUDIT.md) — audit OWASP Top 10 + changelog fix
-- [lab/](./lab/README.md) — môi trường lab pentest (docker-compose Kali + Supabase local, 9 module)
+- [docs/security/SECURITY_AUDIT.md](./docs/security/SECURITY_AUDIT.md) — audit OWASP Top 10 + changelog fix (tài liệu kiến trúc chi tiết & lab pentest là nội bộ, không public)
 
 ---
 

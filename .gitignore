@@ -88,3 +88,6 @@ supabase/.branches/
 .agent/
 docs/AGENTS.md
 docs/ARCHITECTURE.md
+canvases/
+opencode.json
+lab/
