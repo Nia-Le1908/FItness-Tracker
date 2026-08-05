@@ -208,3 +208,8 @@ npm run dev                  # http://localhost:3000
 | Webhook signature | So sánh non-constant-time (timing attack lý thuyết) | Medium |
 
 *Trạng thái bảo mật chi tiết: [SECURITY_AUDIT.md](./docs/security/SECURITY_AUDIT.md) — đã fix 2 Critical (rate-limit spoof, premium gating client-side), backlog gồm enumeration, CORS dev, PostgREST filter injection.*
+
+---
+
+*Built with an AI-assisted agentic workflow (spec-driven development, automated code review, security scanning, and TDD gates).*
+
