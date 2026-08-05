@@ -1,6 +1,8 @@
 import { requireAuth } from "@/lib/api/auth-guard";
-import { jsonError, jsonSuccess } from "@/lib/api/http";
-import { parseJsonBody, requireNumber } from "@/lib/api/validation";
+import { jsonSuccess } from "@/lib/api/http";
+import { handleApiError, isUnauthorizedError } from "@/lib/api/route-errors";
+import { assertRequestBody, toOptionalPositiveNumber } from "@/lib/api/validation";
+import { apiDefaults } from "@/lib/constants";
 import { createProgressEntry, fetchProgressEntries } from "@/services/progress";
 
 export async function GET(request: Request) {
@@ -9,16 +11,23 @@ export async function GET(request: Request) {
     const entries = await fetchProgressEntries(supabase, userId);
     return jsonSuccess({ entries });
   } catch (error) {
-    const message = error instanceof Error && error.message === "Unauthorized." ? error.message : "Unable to load progress entries.";
-    return jsonError(message, error instanceof Error && error.message === "Unauthorized." ? 401 : 500, error instanceof Error && error.message === "Unauthorized." ? "UNAUTHORIZED" : "INTERNAL_ERROR");
+    if (isUnauthorizedError(error)) {
+      return handleApiError(error, "Unauthorized.", apiDefaults.unauthorizedStatus, "UNAUTHORIZED");
+    }
+
+    return handleApiError(error, "Unable to load progress entries.", apiDefaults.internalErrorStatus, "INTERNAL_ERROR");
   }
 }
 
 export async function POST(request: Request) {
   try {
     const { supabase, userId } = await requireAuth(request);
-    const body = parseJsonBody(await request.json());
-    const weightKg = requireNumber(body.weightKg, "weightKg");
+    const body = await request.json();
+    assertRequestBody(body);
+    const weightKg = toOptionalPositiveNumber(body.weightKg);
+    if (weightKg === null) {
+      return handleApiError(new Error("weightKg is required."), "weightKg is required.", apiDefaults.badRequestStatus, "BAD_REQUEST");
+    }
     const recordedAt = typeof body.recordedAt === "string" && body.recordedAt.trim().length > 0
       ? body.recordedAt.trim()
       : new Date().toISOString();
@@ -26,13 +35,12 @@ export async function POST(request: Request) {
     await createProgressEntry(supabase, userId, { recordedAt, weightKg });
     const entries = await fetchProgressEntries(supabase, userId);
 
-    return jsonSuccess({ entries }, 201);
+    return jsonSuccess({ entries }, apiDefaults.createdStatus);
   } catch (error) {
-    const isUnauthorized = error instanceof Error && error.message === "Unauthorized.";
-    return jsonError(
-      isUnauthorized ? error.message : error instanceof Error ? error.message : "Unable to save progress entry.",
-      isUnauthorized ? 401 : 400,
-      isUnauthorized ? "UNAUTHORIZED" : "BAD_REQUEST"
-    );
+    if (isUnauthorizedError(error)) {
+      return handleApiError(error, "Unauthorized.", apiDefaults.unauthorizedStatus, "UNAUTHORIZED");
+    }
+
+    return handleApiError(error, "Unable to save progress entry.", apiDefaults.badRequestStatus, "BAD_REQUEST");
   }
 }

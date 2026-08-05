@@ -1,4 +1,5 @@
 import { createSupabaseRouteClient } from "@/lib/supabase/route-client";
+import { UnauthorizedError } from "@/lib/api/route-errors";
 
 /**
  * Authenticate a request using the Bearer token from the Authorization header.
@@ -15,7 +16,7 @@ export async function requireAuth(request: Request) {
   const { data, error } = await supabase.auth.getUser();
 
   if (error || !data.user) {
-    throw new Error("Unauthorized.");
+    throw new UnauthorizedError();
   }
 
   const userId = data.user.id;

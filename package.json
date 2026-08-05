@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "jest",
+    "security:secrets": "node tools/security/scan-repository-secrets.mjs",
+    "security:supabase-bootstrap": "node tools/security/verify-supabase-bootstrap.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.2",
@@ -18,12 +21,16 @@
     "supabase": "^2.95.6"
   },
   "devDependencies": {
+    "@types/jest": "^30.0.0",
     "@types/node": "^22.15.0",
     "@types/react": "^19.0.13",
     "@types/react-dom": "^19.0.3",
     "autoprefixer": "^10.4.21",
+    "ecc-universal": "^2.0.0",
+    "jest": "^30.3.0",
     "postcss": "^8.5.3",
     "tailwindcss": "^3.4.17",
+    "ts-jest": "^29.4.9",
     "typescript": "^5.8.3"
   }
 }

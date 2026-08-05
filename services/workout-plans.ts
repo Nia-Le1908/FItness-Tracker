@@ -121,6 +121,28 @@ export async function fetchLatestWorkoutPlanVersion(
   return toWorkoutPlanVersion(data as WorkoutPlanVersionRow);
 }
 
+export async function deleteWorkoutPlan(
+  supabase: SupabaseClient,
+  userId: string,
+  planId: string
+): Promise<void> {
+  const { error: versionError } = await supabase
+    .from("workout_plan_versions")
+    .delete()
+    .eq("plan_id", planId)
+    .eq("user_id", userId);
+
+  if (versionError) throw new Error(versionError.message);
+
+  const { error: planError } = await supabase
+    .from("workout_plans")
+    .delete()
+    .eq("id", planId)
+    .eq("user_id", userId);
+
+  if (planError) throw new Error(planError.message);
+}
+
 function toWorkoutPlanVersion(row: WorkoutPlanVersionRow): WorkoutPlanVersion {
   return {
     id: row.id,

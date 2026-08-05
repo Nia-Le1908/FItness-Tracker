@@ -1,19 +1,22 @@
 import { requireAuth } from "@/lib/api/auth-guard";
-import { jsonError, jsonSuccess } from "@/lib/api/http";
-import { parseJsonBody, requireNumber, requireString } from "@/lib/api/validation";
+import { jsonSuccess } from "@/lib/api/http";
+import { handleApiError, isUnauthorizedError } from "@/lib/api/route-errors";
+import { assertSavedPlanLimit } from "@/lib/api/premium-guard";
+import { assertRequestBody, toOptionalPositiveNumber, toTrimmedString } from "@/lib/api/validation";
+import { apiDefaults, mealPlannerLimits } from "@/lib/constants";
 import { createMacroPlan, createMacroPlanVersion, ensureMacroPlanOwnership, fetchLatestMacroPlanVersion, fetchMacroPlanVersions } from "@/services/macro-plans";
 import type { MacroTargets } from "@/types";
 
 function parseMacroTargets(body: Record<string, unknown>): MacroTargets {
-  const calories = requireNumber(body.calories, "calories");
+  const calories = toOptionalPositiveNumber(body.calories) ?? 0;
   return {
-    leanBodyMassKg: requireNumber(body.leanBodyMassKg ?? 0, "leanBodyMassKg"),
-    bmrCalories: requireNumber(body.bmrCalories ?? calories, "bmrCalories"),
-    targetCalories: requireNumber(body.targetCalories ?? calories, "targetCalories"),
+    leanBodyMassKg: toOptionalPositiveNumber(body.leanBodyMassKg ?? 0) ?? 0,
+    bmrCalories: toOptionalPositiveNumber(body.bmrCalories ?? calories) ?? calories,
+    targetCalories: toOptionalPositiveNumber(body.targetCalories ?? calories) ?? calories,
     calories,
-    proteinGrams: requireNumber(body.proteinGrams, "proteinGrams"),
-    carbsGrams: requireNumber(body.carbsGrams, "carbsGrams"),
-    fatGrams: requireNumber(body.fatGrams, "fatGrams")
+    proteinGrams: toOptionalPositiveNumber(body.proteinGrams) ?? 0,
+    carbsGrams: toOptionalPositiveNumber(body.carbsGrams) ?? 0,
+    fatGrams: toOptionalPositiveNumber(body.fatGrams) ?? 0
   };
 }
 
@@ -27,18 +30,21 @@ export async function GET(request: Request) {
 
     if (!planId) {
       if (!latest) {
-        return jsonError("planId is required.", 400, "BAD_REQUEST");
+        return handleApiError(new Error("planId is required."), "planId is required.", apiDefaults.badRequestStatus, "BAD_REQUEST");
       }
 
       const version = await fetchLatestMacroPlanVersion(supabase, userId);
       return jsonSuccess({ version });
     }
 
-    const versions = await fetchMacroPlanVersions(supabase, userId, planId, 20);
+    const versions = await fetchMacroPlanVersions(supabase, userId, planId, mealPlannerLimits.roundedMealHistoryCount);
     return jsonSuccess({ versions });
   } catch (error) {
-    const message = error instanceof Error && error.message === "Unauthorized." ? error.message : "Unable to load macro plans.";
-    return jsonError(message, error instanceof Error && error.message === "Unauthorized." ? 401 : 500, error instanceof Error && error.message === "Unauthorized." ? "UNAUTHORIZED" : "INTERNAL_ERROR");
+    if (isUnauthorizedError(error)) {
+      return handleApiError(error, "Unauthorized.", apiDefaults.unauthorizedStatus, "UNAUTHORIZED");
+    }
+
+    return handleApiError(error, "Unable to load macro plans.", apiDefaults.internalErrorStatus, "INTERNAL_ERROR");
   }
 }
 
@@ -46,8 +52,12 @@ export async function POST(request: Request) {
   try {
     const { supabase, userId } = await requireAuth(request);
 
-    const body = parseJsonBody(await request.json());
-    const name = requireString(body.name, "name");
+    const body = await request.json();
+    assertRequestBody(body);
+    const name = toTrimmedString(body.name);
+    if (!name) {
+      return handleApiError(new Error("name is required."), "name is required.", apiDefaults.badRequestStatus, "BAD_REQUEST");
+    }
     const plan = parseMacroTargets(body.plan as Record<string, unknown>);
     const source = typeof body.source === "string" ? body.source : undefined;
     const planId = typeof body.planId === "string" && body.planId.trim().length > 0 ? body.planId.trim() : undefined;
@@ -55,6 +65,7 @@ export async function POST(request: Request) {
     let finalPlanId = planId;
 
     if (!finalPlanId) {
+      await assertSavedPlanLimit(supabase, userId, "macro_plans");
       const created = await createMacroPlan(supabase, userId, name);
       finalPlanId = created.id;
     } else {
@@ -62,13 +73,12 @@ export async function POST(request: Request) {
     }
 
     const version = await createMacroPlanVersion(supabase, userId, finalPlanId, plan, source);
-    return jsonSuccess({ planId: finalPlanId, version }, 201);
+    return jsonSuccess({ planId: finalPlanId, version }, apiDefaults.createdStatus);
   } catch (error) {
-    const isUnauthorized = error instanceof Error && error.message === "Unauthorized.";
-    return jsonError(
-      isUnauthorized ? error.message : error instanceof Error ? error.message : "Unable to save macro plan.",
-      isUnauthorized ? 401 : 400,
-      isUnauthorized ? "UNAUTHORIZED" : "BAD_REQUEST"
-    );
+    if (isUnauthorizedError(error)) {
+      return handleApiError(error, "Unauthorized.", apiDefaults.unauthorizedStatus, "UNAUTHORIZED");
+    }
+
+    return handleApiError(error, "Unable to save macro plan.", apiDefaults.badRequestStatus, "BAD_REQUEST");
   }
 }

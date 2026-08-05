@@ -24,11 +24,15 @@ export function buildBudgetMealPlan(request: MealPlanRequest): MealPlanResult {
   const fatFoods = [...foods].sort((left, right) => fatScore(right) - fatScore(left));
 
   for (let index = 0; index < mealCount; index += 1) {
+    const proteinPick = selectFood(proteinFoods, []);
+    const carbPick = selectFood(carbFoods, [proteinPick.id]);
+    const fatPick = selectFood(fatFoods, [proteinPick.id, carbPick.id]);
+
     const mealItems = compactEntries(
       [
-        portionForMacro(selectFood(proteinFoods, []), targetPerMeal.proteinGrams * 0.95, "protein"),
-        portionForMacro(selectFood(carbFoods, [proteinFoods[0]?.id]), targetPerMeal.carbsGrams * 0.95, "carbs"),
-        portionForMacro(selectFood(fatFoods, [proteinFoods[0]?.id, carbFoods[0]?.id]), targetPerMeal.fatGrams * 0.95, "fat")
+        portionForMacro(proteinPick, targetPerMeal.proteinGrams * 0.95, "protein"),
+        portionForMacro(carbPick, targetPerMeal.carbsGrams * 0.95, "carbs"),
+        portionForMacro(fatPick, targetPerMeal.fatGrams * 0.95, "fat")
       ].filter((entry): entry is MealPlanEntry => Boolean(entry))
     );
 
@@ -94,7 +98,10 @@ function fatScore(food: MealFood): number {
 
 function selectFood(candidates: MealFood[], excludedIds: Array<string | undefined>): MealFood {
   const selected = candidates.find((food) => !excludedIds.includes(food.id));
-  return selected ?? candidates[0];
+  if (!selected) {
+    throw new Error("Not enough foods to build a meal plan. Add more foods to the list.");
+  }
+  return selected;
 }
 
 function portionForMacro(food: MealFood, targetMacroGrams: number, kind: MacroKind): MealPlanEntry | null {

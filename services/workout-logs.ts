@@ -58,7 +58,8 @@ export async function createWorkoutSetLog(
       set_number: input.setNumber,
       reps: input.reps,
       weight_kg: input.weightKg,
-      notes: input.notes
+      notes: input.notes,
+      session_id: input.sessionId ?? null
     })
     .select("id, workout_date, recorded_at, exercise_name, set_number, reps, weight_kg")
     .single();
@@ -80,4 +81,41 @@ function toWorkoutSetLog(row: WorkoutSetRow): WorkoutSetLog {
     reps: Number(row.reps),
     weightKg: Number(row.weight_kg)
   };
+}
+
+export async function updateWorkoutSetLog(
+  supabase: SupabaseClient,
+  userId: string,
+  id: string,
+  patch: { setNumber?: number; reps?: number; weightKg?: number }
+): Promise<WorkoutSetLog> {
+  const updates: Record<string, unknown> = {};
+  if (patch.setNumber !== undefined) updates.set_number = patch.setNumber;
+  if (patch.reps !== undefined) updates.reps = patch.reps;
+  if (patch.weightKg !== undefined) updates.weight_kg = patch.weightKg;
+
+  const { data, error } = await supabase
+    .from("workout_sets")
+    .update(updates)
+    .eq("id", id)
+    .eq("user_id", userId)
+    .select("id, workout_date, recorded_at, exercise_name, set_number, reps, weight_kg")
+    .single();
+
+  if (error) throw new Error(error.message);
+  return toWorkoutSetLog(data as WorkoutSetRow);
+}
+
+export async function deleteWorkoutSetLog(
+  supabase: SupabaseClient,
+  userId: string,
+  id: string
+): Promise<void> {
+  const { error } = await supabase
+    .from("workout_sets")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", userId);
+
+  if (error) throw new Error(error.message);
 }

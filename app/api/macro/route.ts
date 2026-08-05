@@ -1,20 +1,33 @@
-import { calculateMacroTargets } from "@/services/macro-calculator";
-import { jsonError, jsonSuccess } from "@/lib/api/http";
-import { parseJsonBody, requireNumber, requireOneOf } from "@/lib/api/validation";
+import { calculateMacroRecommendation } from "@/services/macro-calculator";
+import { jsonSuccess } from "@/lib/api/http";
+import { handleApiError } from "@/lib/api/route-errors";
+import { assertRequestBody, toOptionalPositiveNumber, isAllowedValue } from "@/lib/api/validation";
+import { apiDefaults } from "@/lib/constants";
 
 export async function POST(request: Request) {
   try {
-    const body = parseJsonBody(await request.json());
-    const result = calculateMacroTargets({
-      weightKg: requireNumber(body.weightKg, "weightKg"),
-      bodyFatPercent: requireNumber(body.bodyFatPercent, "bodyFatPercent"),
-      goal: requireOneOf(body.goal, "goal", ["cut", "maintain", "bulk"] as const),
-      activityLevel: requireOneOf(body.activityLevel, "activityLevel", ["sedentary", "light", "moderate", "active"] as const)
+    const body = await request.json();
+    assertRequestBody(body);
+
+    const goal = isAllowedValue(body.goal, ["cut", "maintain", "bulk"] as const) ? body.goal : null;
+    const activityLevel = isAllowedValue(body.activityLevel, ["sedentary", "light", "moderate", "active"] as const) ? body.activityLevel : null;
+
+    if (!goal || !activityLevel) {
+      throw new Error("Invalid macro request.");
+    }
+
+    const weightKg = toOptionalPositiveNumber(body.weightKg) ?? 0;
+    const bodyFatPercent = toOptionalPositiveNumber(body.bodyFatPercent) ?? undefined;
+
+    const recommendation = calculateMacroRecommendation({
+      weightKg,
+      bodyFatPercent,
+      goal: goal as "cut" | "maintain" | "bulk",
+      activityLevel: activityLevel as "sedentary" | "light" | "moderate" | "active"
     });
 
-    return jsonSuccess(result);
+    return jsonSuccess(recommendation);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to calculate macros.";
-    return jsonError(message, 400, "BAD_REQUEST");
+    return handleApiError(error, "Unable to calculate macros.", apiDefaults.badRequestStatus, "BAD_REQUEST");
   }
 }

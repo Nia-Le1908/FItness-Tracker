@@ -25,13 +25,15 @@ export function ProgressTracker() {
       return;
     }
 
+    // Local const that TS can keep narrowing inside the async closure below.
+    const client = supabase;
     let active = true;
 
     async function load() {
       setLoading(true);
       setError(null);
 
-      const { data } = await supabase.auth.getSession();
+      const { data } = await client.auth.getSession();
       if (!active) {
         return;
       }
@@ -64,7 +66,7 @@ export function ProgressTracker() {
 
     load();
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: listener } = client.auth.onAuthStateChange((_event, session) => {
       setSignedIn(Boolean(session));
     });
 

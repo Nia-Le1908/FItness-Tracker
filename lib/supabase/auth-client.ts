@@ -1,5 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 
+const STORAGE_KEY = "sb-fitbudget-auth-token";
+
 let browserClient: ReturnType<typeof createClient> | null = null;
 
 export function createSupabaseBrowserClient() {
@@ -11,6 +13,7 @@ export function createSupabaseBrowserClient() {
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !supabaseAnonKey) {
+    console.error("[Auth] Missing env vars. URL:", !!supabaseUrl, "Key:", !!supabaseAnonKey);
     return null;
   }
 
@@ -18,9 +21,15 @@ export function createSupabaseBrowserClient() {
     auth: {
       persistSession: true,
       autoRefreshToken: true,
-      detectSessionInUrl: true
+      detectSessionInUrl: true,
+      flowType: "pkce",
+      storageKey: STORAGE_KEY
     }
   });
 
   return browserClient;
+}
+
+export function clearBrowserClient() {
+  browserClient = null;
 }

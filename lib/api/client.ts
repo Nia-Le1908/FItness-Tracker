@@ -1,9 +1,38 @@
 import { createSupabaseBrowserClient } from "@/lib/supabase/auth-client";
 
-export async function fetchJson<TResponse>(
-  input: RequestInfo | URL,
-  init: RequestInit = {}
-): Promise<TResponse> {
+export type FriendlyApiError = {
+  message: string;
+  code: string;
+};
+
+type ApiErrorPayload = {
+  error?: Partial<FriendlyApiError>;
+};
+
+function friendlyApiMessage(payload: unknown, fallback: string) {
+  const errorPayload = payload as ApiErrorPayload | undefined;
+  const code = errorPayload?.error?.code ?? "";
+  const message = errorPayload?.error?.message ?? fallback;
+
+  if (code === "VALIDATION_ERROR") {
+    return message;
+  }
+
+  if (code === "UNAUTHORIZED") {
+    return "Sign in to continue.";
+  }
+
+  return message || fallback;
+}
+
+export function normalizeUiError(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return "Request failed.";
+}
+
+export async function fetchJson<TResponse>(input: RequestInfo | URL, init: RequestInit = {}): Promise<TResponse> {
   const response = await fetch(input, {
     ...init,
     headers: {
@@ -12,13 +41,10 @@ export async function fetchJson<TResponse>(
     }
   });
 
-  const payload = (await response.json()) as
-    | { data: TResponse }
-    | { error: { message: string; code: string } };
+  const payload = (await response.json()) as { data: TResponse } | ApiErrorPayload;
 
   if (!response.ok) {
-    const errorMessage = "error" in payload ? payload.error.message : "Request failed.";
-    throw new Error(errorMessage);
+    throw new Error(friendlyApiMessage(payload, "Request failed."));
   }
 
   if (!payload || !("data" in payload)) {
@@ -28,11 +54,12 @@ export async function fetchJson<TResponse>(
   return payload.data;
 }
 
-export async function authedJsonFetch<TResponse>(
-  input: RequestInfo | URL,
-  init: RequestInit = {}
-): Promise<TResponse> {
+export async function authedJsonFetch<TResponse>(input: RequestInfo | URL, init: RequestInit = {}): Promise<TResponse> {
   const supabase = createSupabaseBrowserClient();
+  if (!supabase) {
+    throw new Error("Authentication is not configured for this browser session.");
+  }
+
   const { data } = await supabase.auth.getSession();
 
   if (!data.session?.access_token) {
@@ -48,13 +75,10 @@ export async function authedJsonFetch<TResponse>(
     }
   });
 
-  const payload = (await response.json()) as
-    | { data: TResponse }
-    | { error: { message: string; code: string } };
+  const payload = (await response.json()) as { data: TResponse } | ApiErrorPayload;
 
   if (!response.ok) {
-    const errorMessage = "error" in payload ? payload.error.message : "Request failed.";
-    throw new Error(errorMessage);
+    throw new Error(friendlyApiMessage(payload, "Request failed."));
   }
 
   if (!payload || !("data" in payload)) {

@@ -1,6 +1,9 @@
 import { requireAuth } from "@/lib/api/auth-guard";
-import { jsonError, jsonSuccess } from "@/lib/api/http";
-import { parseJsonBody, requireNumber, requireString } from "@/lib/api/validation";
+import { jsonSuccess } from "@/lib/api/http";
+import { handleApiError, isUnauthorizedError } from "@/lib/api/route-errors";
+import { assertSavedPlanLimit } from "@/lib/api/premium-guard";
+import { assertRequestBody, toOptionalPositiveNumber, toTrimmedString } from "@/lib/api/validation";
+import { apiDefaults, mealPlannerLimits } from "@/lib/constants";
 import { createMealPlan, createMealPlanVersion, ensureMealPlanOwnership, fetchLatestMealPlanVersion, fetchMealPlanVersions } from "@/services/meal-plans";
 import type { MealMacroTargets, MealPlanResult, MealPlanSnapshot } from "@/types";
 
@@ -13,12 +16,12 @@ function parseMealPlanSnapshot(body: Record<string, unknown>): MealPlanSnapshot 
   }
 
   return {
-    budgetVnd: requireNumber(body.budgetVnd, "budgetVnd"),
+    budgetVnd: toOptionalPositiveNumber(body.budgetVnd) ?? 0,
     targetMacros: {
-      calories: requireNumber(targetMacros.calories, "targetMacros.calories"),
-      proteinGrams: requireNumber(targetMacros.proteinGrams, "targetMacros.proteinGrams"),
-      carbsGrams: requireNumber(targetMacros.carbsGrams, "targetMacros.carbsGrams"),
-      fatGrams: requireNumber(targetMacros.fatGrams, "targetMacros.fatGrams")
+      calories: toOptionalPositiveNumber(targetMacros.calories) ?? 0,
+      proteinGrams: toOptionalPositiveNumber(targetMacros.proteinGrams) ?? 0,
+      carbsGrams: toOptionalPositiveNumber(targetMacros.carbsGrams) ?? 0,
+      fatGrams: toOptionalPositiveNumber(targetMacros.fatGrams) ?? 0
     },
     plan
   };
@@ -34,18 +37,21 @@ export async function GET(request: Request) {
 
     if (!planId) {
       if (!latest) {
-        return jsonError("planId is required.", 400, "BAD_REQUEST");
+        return handleApiError(new Error("planId is required."), "planId is required.", apiDefaults.badRequestStatus, "BAD_REQUEST");
       }
 
       const version = await fetchLatestMealPlanVersion(supabase, userId);
       return jsonSuccess({ version });
     }
 
-    const versions = await fetchMealPlanVersions(supabase, userId, planId, 20);
+    const versions = await fetchMealPlanVersions(supabase, userId, planId, mealPlannerLimits.roundedMealHistoryCount);
     return jsonSuccess({ versions });
   } catch (error) {
-    const message = error instanceof Error && error.message === "Unauthorized." ? error.message : "Unable to load meal plans.";
-    return jsonError(message, error instanceof Error && error.message === "Unauthorized." ? 401 : 500, error instanceof Error && error.message === "Unauthorized." ? "UNAUTHORIZED" : "INTERNAL_ERROR");
+    if (isUnauthorizedError(error)) {
+      return handleApiError(error, "Unauthorized.", apiDefaults.unauthorizedStatus, "UNAUTHORIZED");
+    }
+
+    return handleApiError(error, "Unable to load meal plans.", apiDefaults.internalErrorStatus, "INTERNAL_ERROR");
   }
 }
 
@@ -53,15 +59,20 @@ export async function POST(request: Request) {
   try {
     const { supabase, userId } = await requireAuth(request);
 
-    const body = parseJsonBody(await request.json());
-    const name = requireString(body.name, "name");
-    const snapshot = parseMealPlanSnapshot(body as Record<string, unknown>);
+    const body = await request.json();
+    assertRequestBody(body);
+    const name = toTrimmedString(body.name);
+    if (!name) {
+      return handleApiError(new Error("name is required."), "name is required.", apiDefaults.badRequestStatus, "BAD_REQUEST");
+    }
+    const snapshot = parseMealPlanSnapshot(body);
     const source = typeof body.source === "string" ? body.source : undefined;
     const planId = typeof body.planId === "string" && body.planId.trim().length > 0 ? body.planId.trim() : undefined;
 
     let finalPlanId = planId;
 
     if (!finalPlanId) {
+      await assertSavedPlanLimit(supabase, userId, "meal_plans");
       const created = await createMealPlan(supabase, userId, name);
       finalPlanId = created.id;
     } else {
@@ -69,13 +80,12 @@ export async function POST(request: Request) {
     }
 
     const version = await createMealPlanVersion(supabase, userId, finalPlanId, snapshot, source);
-    return jsonSuccess({ planId: finalPlanId, version }, 201);
+    return jsonSuccess({ planId: finalPlanId, version }, apiDefaults.createdStatus);
   } catch (error) {
-    const isUnauthorized = error instanceof Error && error.message === "Unauthorized.";
-    return jsonError(
-      isUnauthorized ? error.message : error instanceof Error ? error.message : "Unable to save meal plan.",
-      isUnauthorized ? 401 : 400,
-      isUnauthorized ? "UNAUTHORIZED" : "BAD_REQUEST"
-    );
+    if (isUnauthorizedError(error)) {
+      return handleApiError(error, "Unauthorized.", apiDefaults.unauthorizedStatus, "UNAUTHORIZED");
+    }
+
+    return handleApiError(error, "Unable to save meal plan.", apiDefaults.badRequestStatus, "BAD_REQUEST");
   }
 }

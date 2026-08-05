@@ -1,0 +1,23 @@
+{
+  "code": "00",
+  "desc": "success",
+  "data": {
+    "orderCode": 123456,
+    "amount": 99000,
+    "status": "PAID",
+    "expiredAt": 1735689600,
+    "transactionDateTime": "2026-05-03T10:30:00.000Z",
+    "reference": "FB-123456",
+    "buyerEmail": "demo@example.com",
+    "buyerName": "Demo User",
+    "metadata": {
+      "user_id": "user-123",
+      "plan": "premium",
+      "gateway": "payos",
+      "orderCode": 123456
+    },
+    "productId": "prod_premium_01",
+    "customerId": "cus_abc123",
+    "paymentLinkId": "plink_789"
+  }
+}

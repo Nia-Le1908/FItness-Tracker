@@ -1,7 +1,10 @@
 import { requireAuth } from "@/lib/api/auth-guard";
-import { jsonError, jsonSuccess } from "@/lib/api/http";
-import { parseJsonBody, requireString } from "@/lib/api/validation";
-import { createWorkoutPlan, createWorkoutPlanVersion, ensureWorkoutPlanOwnership, fetchLatestWorkoutPlanVersion, fetchWorkoutPlanVersions } from "@/services/workout-plans";
+import { jsonSuccess } from "@/lib/api/http";
+import { handleApiError, isUnauthorizedError } from "@/lib/api/route-errors";
+import { assertSavedPlanLimit } from "@/lib/api/premium-guard";
+import { assertRequestBody, toTrimmedString } from "@/lib/api/validation";
+import { apiDefaults, mealPlannerLimits } from "@/lib/constants";
+import { createWorkoutPlan, createWorkoutPlanVersion, ensureWorkoutPlanOwnership, fetchLatestWorkoutPlanVersion, fetchWorkoutPlanVersions, deleteWorkoutPlan } from "@/services/workout-plans";
 import type { WorkoutPlan } from "@/types";
 
 export async function GET(request: Request) {
@@ -14,19 +17,22 @@ export async function GET(request: Request) {
 
     if (!planId) {
       if (!latest) {
-        return jsonError("planId is required.", 400, "BAD_REQUEST");
+        return handleApiError(new Error("planId is required."), "planId is required.", apiDefaults.badRequestStatus, "BAD_REQUEST");
       }
 
       const version = await fetchLatestWorkoutPlanVersion(supabase, userId);
       return jsonSuccess({ version });
     }
 
-    const versions = await fetchWorkoutPlanVersions(supabase, userId, planId, 20);
+    const versions = await fetchWorkoutPlanVersions(supabase, userId, planId, mealPlannerLimits.roundedMealHistoryCount);
 
     return jsonSuccess({ versions });
   } catch (error) {
-    const message = error instanceof Error && error.message === "Unauthorized." ? error.message : "Unable to load workout plans.";
-    return jsonError(message, error instanceof Error && error.message === "Unauthorized." ? 401 : 500, error instanceof Error && error.message === "Unauthorized." ? "UNAUTHORIZED" : "INTERNAL_ERROR");
+    if (isUnauthorizedError(error)) {
+      return handleApiError(error, "Unauthorized.", apiDefaults.unauthorizedStatus, "UNAUTHORIZED");
+    }
+
+    return handleApiError(error, "Unable to load workout plans.", apiDefaults.internalErrorStatus, "INTERNAL_ERROR");
   }
 }
 
@@ -34,12 +40,16 @@ export async function POST(request: Request) {
   try {
     const { supabase, userId } = await requireAuth(request);
 
-    const body = parseJsonBody(await request.json());
-    const name = requireString(body.name, "name");
+    const body = await request.json();
+    assertRequestBody(body);
+    const name = toTrimmedString(body.name);
+    if (!name) {
+      return handleApiError(new Error("name is required."), "name is required.", apiDefaults.badRequestStatus, "BAD_REQUEST");
+    }
     const plan = body.plan as WorkoutPlan;
 
     if (!plan || !Array.isArray(plan.days)) {
-      return jsonError("plan must include days.", 400, "BAD_REQUEST");
+      return handleApiError(new Error("plan must include days."), "plan must include days.", apiDefaults.badRequestStatus, "BAD_REQUEST");
     }
 
     const source = typeof body.source === "string" ? body.source : undefined;
@@ -48,6 +58,7 @@ export async function POST(request: Request) {
     let finalPlanId = planId;
 
     if (!finalPlanId) {
+      await assertSavedPlanLimit(supabase, userId, "workout_plans");
       const created = await createWorkoutPlan(supabase, userId, name);
       finalPlanId = created.id;
     } else {
@@ -56,13 +67,33 @@ export async function POST(request: Request) {
 
     const version = await createWorkoutPlanVersion(supabase, userId, finalPlanId, plan, source);
 
-    return jsonSuccess({ planId: finalPlanId, version }, 201);
+    return jsonSuccess({ planId: finalPlanId, version }, apiDefaults.createdStatus);
   } catch (error) {
-    const isUnauthorized = error instanceof Error && error.message === "Unauthorized.";
-    return jsonError(
-      isUnauthorized ? error.message : error instanceof Error ? error.message : "Unable to save workout plan.",
-      isUnauthorized ? 401 : 400,
-      isUnauthorized ? "UNAUTHORIZED" : "BAD_REQUEST"
-    );
+    if (isUnauthorizedError(error)) {
+      return handleApiError(error, "Unauthorized.", apiDefaults.unauthorizedStatus, "UNAUTHORIZED");
+    }
+
+    return handleApiError(error, "Unable to save workout plan.", apiDefaults.badRequestStatus, "BAD_REQUEST");
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const { supabase, userId } = await requireAuth(request);
+    const { searchParams } = new URL(request.url);
+    const planId = searchParams.get("planId");
+    if (!planId) {
+      return handleApiError(new Error("planId is required."), "planId is required.", apiDefaults.badRequestStatus, "BAD_REQUEST");
+    }
+
+    await deleteWorkoutPlan(supabase, userId, planId);
+
+    return jsonSuccess({ ok: true });
+  } catch (error) {
+    if (isUnauthorizedError(error)) {
+      return handleApiError(error, "Unauthorized.", apiDefaults.unauthorizedStatus, "UNAUTHORIZED");
+    }
+
+    return handleApiError(error, "Unable to delete workout plan.", apiDefaults.badRequestStatus, "BAD_REQUEST");
   }
 }

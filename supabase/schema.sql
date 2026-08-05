@@ -3,7 +3,6 @@
 
 create extension if not exists pgcrypto;
 
--- Generic updated_at helper.
 create or replace function public.set_updated_at()
 returns trigger
 language plpgsql
@@ -14,7 +13,6 @@ begin
 end;
 $$;
 
--- Public profile table that extends Supabase Auth.
 create table if not exists public.users (
   id uuid primary key references auth.users (id) on delete cascade,
   email text unique,
@@ -24,6 +22,7 @@ create table if not exists public.users (
   birth_date date,
   sex text check (sex in ('male', 'female', 'other')),
   goal text check (goal in ('cut', 'maintain', 'bulk')),
+  role text not null default 'user' check (role in ('user', 'support', 'moderator', 'admin')),
   daily_budget_vnd integer check (daily_budget_vnd >= 0),
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
@@ -34,7 +33,8 @@ create trigger users_set_updated_at
 before update on public.users
 for each row execute function public.set_updated_at();
 
-
+-- Core nutrition and training tables. These definitions intentionally live in
+-- the canonical bootstrap so policies never reference tables that do not exist.
 create table if not exists public.foods (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -51,10 +51,8 @@ create table if not exists public.foods (
 );
 
 drop trigger if exists foods_set_updated_at on public.foods;
-create trigger foods_set_updated_at
-before update on public.foods
+create trigger foods_set_updated_at before update on public.foods
 for each row execute function public.set_updated_at();
-
 create index if not exists idx_foods_category on public.foods (category);
 create index if not exists idx_foods_active on public.foods (is_active);
 
@@ -74,12 +72,8 @@ create table if not exists public.daily_plans (
 );
 
 drop trigger if exists daily_plans_set_updated_at on public.daily_plans;
-create trigger daily_plans_set_updated_at
-before update on public.daily_plans
+create trigger daily_plans_set_updated_at before update on public.daily_plans
 for each row execute function public.set_updated_at();
-
-create index if not exists idx_daily_plans_user_id on public.daily_plans (user_id);
-create index if not exists idx_daily_plans_plan_date on public.daily_plans (plan_date);
 create index if not exists idx_daily_plans_user_date on public.daily_plans (user_id, plan_date desc);
 
 create table if not exists public.progress (
@@ -95,25 +89,26 @@ create table if not exists public.progress (
   updated_at timestamptz not null default timezone('utc', now())
 );
 
-alter table public.progress
-  alter column recorded_at type timestamptz using recorded_at::timestamptz,
-  alter column recorded_at set default timezone('utc', now());
-
-alter table public.progress drop constraint if exists progress_user_id_recorded_at_key;
-
 drop trigger if exists progress_set_updated_at on public.progress;
-create trigger progress_set_updated_at
-before update on public.progress
+create trigger progress_set_updated_at before update on public.progress
 for each row execute function public.set_updated_at();
-
-create index if not exists idx_progress_user_id on public.progress (user_id);
-create index if not exists idx_progress_recorded_at on public.progress (recorded_at desc);
 create index if not exists idx_progress_user_recorded_at on public.progress (user_id, recorded_at desc);
 
+create table if not exists public.workout_sessions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users (id) on delete cascade,
+  plan_id uuid,
+  started_at timestamptz not null default timezone('utc', now()),
+  finished_at timestamptz,
+  duration_seconds integer,
+  notes text,
+  created_at timestamptz not null default timezone('utc', now())
+);
 
 create table if not exists public.workout_sets (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users (id) on delete cascade,
+  session_id uuid references public.workout_sessions (id) on delete set null,
   workout_date date not null default (timezone('utc', now())::date),
   recorded_at timestamptz not null default timezone('utc', now()),
   exercise_name text not null,
@@ -124,11 +119,8 @@ create table if not exists public.workout_sets (
   created_at timestamptz not null default timezone('utc', now())
 );
 
-create index if not exists idx_workout_sets_user_id on public.workout_sets (user_id);
-create index if not exists idx_workout_sets_recorded_at on public.workout_sets (recorded_at desc);
 create index if not exists idx_workout_sets_user_date on public.workout_sets (user_id, workout_date desc);
 create index if not exists idx_workout_sets_user_exercise on public.workout_sets (user_id, exercise_name);
-
 
 create table if not exists public.workout_plans (
   id uuid primary key default gen_random_uuid(),
@@ -139,12 +131,9 @@ create table if not exists public.workout_plans (
 );
 
 drop trigger if exists workout_plans_set_updated_at on public.workout_plans;
-create trigger workout_plans_set_updated_at
-before update on public.workout_plans
+create trigger workout_plans_set_updated_at before update on public.workout_plans
 for each row execute function public.set_updated_at();
-
 create index if not exists idx_workout_plans_user_id on public.workout_plans (user_id);
-
 
 create table if not exists public.workout_plan_versions (
   id uuid primary key default gen_random_uuid(),
@@ -154,10 +143,7 @@ create table if not exists public.workout_plan_versions (
   plan_json jsonb not null,
   created_at timestamptz not null default timezone('utc', now())
 );
-
 create index if not exists idx_workout_plan_versions_plan_id on public.workout_plan_versions (plan_id, created_at desc);
-create index if not exists idx_workout_plan_versions_user_id on public.workout_plan_versions (user_id);
-
 
 create table if not exists public.macro_plans (
   id uuid primary key default gen_random_uuid(),
@@ -166,14 +152,9 @@ create table if not exists public.macro_plans (
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
 );
-
 drop trigger if exists macro_plans_set_updated_at on public.macro_plans;
-create trigger macro_plans_set_updated_at
-before update on public.macro_plans
+create trigger macro_plans_set_updated_at before update on public.macro_plans
 for each row execute function public.set_updated_at();
-
-create index if not exists idx_macro_plans_user_id on public.macro_plans (user_id);
-
 
 create table if not exists public.macro_plan_versions (
   id uuid primary key default gen_random_uuid(),
@@ -184,10 +165,6 @@ create table if not exists public.macro_plan_versions (
   created_at timestamptz not null default timezone('utc', now())
 );
 
-create index if not exists idx_macro_plan_versions_plan_id on public.macro_plan_versions (plan_id, created_at desc);
-create index if not exists idx_macro_plan_versions_user_id on public.macro_plan_versions (user_id);
-
-
 create table if not exists public.meal_plans (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users (id) on delete cascade,
@@ -195,14 +172,9 @@ create table if not exists public.meal_plans (
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
 );
-
 drop trigger if exists meal_plans_set_updated_at on public.meal_plans;
-create trigger meal_plans_set_updated_at
-before update on public.meal_plans
+create trigger meal_plans_set_updated_at before update on public.meal_plans
 for each row execute function public.set_updated_at();
-
-create index if not exists idx_meal_plans_user_id on public.meal_plans (user_id);
-
 
 create table if not exists public.meal_plan_versions (
   id uuid primary key default gen_random_uuid(),
@@ -212,10 +184,6 @@ create table if not exists public.meal_plan_versions (
   plan_json jsonb not null,
   created_at timestamptz not null default timezone('utc', now())
 );
-
-create index if not exists idx_meal_plan_versions_plan_id on public.meal_plan_versions (plan_id, created_at desc);
-create index if not exists idx_meal_plan_versions_user_id on public.meal_plan_versions (user_id);
-
 
 create table if not exists public.macro_plan_templates (
   id uuid primary key default gen_random_uuid(),
@@ -230,15 +198,9 @@ create table if not exists public.macro_plan_templates (
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
 );
-
 drop trigger if exists macro_plan_templates_set_updated_at on public.macro_plan_templates;
-create trigger macro_plan_templates_set_updated_at
-before update on public.macro_plan_templates
+create trigger macro_plan_templates_set_updated_at before update on public.macro_plan_templates
 for each row execute function public.set_updated_at();
-
-create index if not exists idx_macro_plan_templates_active on public.macro_plan_templates (is_active);
-create index if not exists idx_macro_plan_templates_goal on public.macro_plan_templates (goal);
-
 
 create table if not exists public.meal_plan_templates (
   id uuid primary key default gen_random_uuid(),
@@ -253,15 +215,9 @@ create table if not exists public.meal_plan_templates (
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
 );
-
 drop trigger if exists meal_plan_templates_set_updated_at on public.meal_plan_templates;
-create trigger meal_plan_templates_set_updated_at
-before update on public.meal_plan_templates
+create trigger meal_plan_templates_set_updated_at before update on public.meal_plan_templates
 for each row execute function public.set_updated_at();
-
-create index if not exists idx_meal_plan_templates_active on public.meal_plan_templates (is_active);
-create index if not exists idx_meal_plan_templates_goal on public.meal_plan_templates (goal);
-
 
 create table if not exists public.workout_plan_templates (
   id uuid primary key default gen_random_uuid(),
@@ -278,13 +234,92 @@ create table if not exists public.workout_plan_templates (
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
 );
-
 drop trigger if exists workout_plan_templates_set_updated_at on public.workout_plan_templates;
-create trigger workout_plan_templates_set_updated_at
-before update on public.workout_plan_templates
+create trigger workout_plan_templates_set_updated_at before update on public.workout_plan_templates
 for each row execute function public.set_updated_at();
 
-create index if not exists idx_workout_plan_templates_active on public.workout_plan_templates (is_active);
-create index if not exists idx_workout_plan_templates_goal on public.workout_plan_templates (goal);
-create index if not exists idx_workout_plan_templates_equipment on public.workout_plan_templates (equipment);
+create table if not exists public.user_goals (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null unique references public.users (id) on delete cascade,
+  goal_type text not null check (goal_type in ('cut', 'maintain', 'bulk')),
+  target_weight_kg numeric(6, 2),
+  target_rate_per_week_kg numeric(5, 2),
+  start_weight_kg numeric(6, 2),
+  start_date timestamptz not null default timezone('utc', now()),
+  status text not null default 'active' check (status in ('active', 'paused', 'completed', 'archived')),
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
+create table if not exists public.goal_reminders (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users (id) on delete cascade,
+  goal_id uuid references public.user_goals (id) on delete set null,
+  goal text not null check (goal in ('cut', 'maintain', 'bulk')),
+  title text not null,
+  message text not null,
+  cadence text not null check (cadence in ('weekly', 'monthly', 'event')),
+  channel text not null default 'in_app' check (channel in ('in_app', 'email', 'push')),
+  is_enabled boolean not null default true,
+  last_sent_at timestamptz,
+  next_send_at timestamptz,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
+create table if not exists public.notification_events (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users (id) on delete cascade,
+  reminder_id uuid references public.goal_reminders (id) on delete set null,
+  type text not null check (type in ('nudges', 'goal_update', 'streak', 'reminder')),
+  title text not null,
+  body text not null,
+  state text not null default 'queued' check (state in ('queued', 'sent', 'read', 'dismissed', 'failed')),
+  payload jsonb,
+  scheduled_at timestamptz,
+  sent_at timestamptz,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
+drop trigger if exists notification_events_set_updated_at on public.notification_events;
+create trigger notification_events_set_updated_at
+before update on public.notification_events
+for each row execute function public.set_updated_at();
+
+create table if not exists public.observability_events (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references public.users (id) on delete set null,
+  session_id text,
+  event_type text not null check (event_type in ('page_view', 'ui_action', 'api_error', 'runtime_error', 'performance')),
+  source text not null default 'client' check (source in ('client', 'server', 'worker')),
+  route text,
+  component text,
+  message text,
+  severity text not null default 'info' check (severity in ('info', 'warning', 'error', 'critical')),
+  payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default timezone('utc', now())
+);
+
+create index if not exists idx_observability_events_created_at on public.observability_events (created_at desc);
+create index if not exists idx_observability_events_user_created on public.observability_events (user_id, created_at desc);
+create index if not exists idx_observability_events_type_created on public.observability_events (event_type, created_at desc);
+
+create table if not exists public.audit_events (
+  id uuid primary key default gen_random_uuid(),
+  actor_user_id uuid references public.users (id) on delete set null,
+  actor_role text,
+  target_type text not null,
+  target_id text not null,
+  action text not null,
+  summary text not null,
+  payload jsonb not null default '{}'::jsonb,
+  ip_address inet,
+  user_agent text,
+  created_at timestamptz not null default timezone('utc', now())
+);
+
+create index if not exists idx_audit_events_created_at on public.audit_events (created_at desc);
+create index if not exists idx_audit_events_target on public.audit_events (target_type, target_id);
 
