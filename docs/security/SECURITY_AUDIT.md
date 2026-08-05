@@ -1,192 +1,196 @@
-# FitBudget — Báo cáo Quét Bảo mật
+# FitBudget — Security Audit Report
 
-> Ngày quét: 2026-07-28
-> Phạm vi: mã nguồn (Next.js 15 App Router + Supabase), Dockerfile, docker-compose, middleware, 31 API routes, 25 RLS policies, PayOS integration.
-> Phương pháp: static review theo OWASP Top 10 (2021) + ASVS profile cơ bản.
+> Version: 2.0 | Initial scan: 2026-07-28 | Last review: 2026-08-05
+>
+> **Scope**: Application source code (Next.js 15 App Router + Supabase), middleware, 31 API routes, 25 RLS policies, PayOS payment integration, Dockerfile, docker-compose.
+> **Methodology**: Static code review against OWASP Top 10 (2021) and a baseline ASVS 4.0 profile.
+> **Verification**: `npm test` (240 tests / 31 suites), `npm run typecheck`, `npm run security:secrets`.
 
-## 1. Stack & bề mặt tấn công
+---
 
-| Lớp | Công nghệ | Bề mặt tấn công chính |
-|-----|-----------|----------------------|
-| Frontend | Next.js 15 (App Router, RSC), React 19, Turbopack | XSS qua `dangerouslySetInnerHTML`, CSP bypass, SSRF qua `connect-src` |
-| API | 31 endpoints `/api/*` (Edge/Node) | IDOR, broken auth, rate-limit bypass, input validation |
-| Auth | Supabase Auth (JWT Bearer, PKCE) | Token theft, refresh-token replay, role escalation |
-| DB | Postgres qua Supabase PostgREST | RLS bypass, column-level escalation, SQL injection (qua `.rpc()`) |
-| Payments | PayOS (HMAC-SHA256) | Webhook replay, signature forgery, IDOR checkout |
-| Infra | Docker multi-stage, non-root user 1001 | Container escape, secret leak trong image, port exposure |
+## 1. Executive Summary
 
-**Bề mặt tấn công công khai** (không yêu cầu auth):
-- `GET /api/workout-templates`, `POST /api/workout`, `POST /api/meal`, `POST /api/macro` — public calculator
-- `POST /api/observability/events` — telemetry ingest (anon cho phép)
-- `POST /api/billing/webhook` — PayOS webhook
-- `POST /api/notifications/cron` — cron bearer
-- `/.well-known/security.txt`, `/robots.txt`
+The application implements a defense-in-depth posture for an early-stage product: row-level security on all user-scoped tables, server-side authorization guards, column-level privilege protection on `users.role`, HMAC-verified webhook processing with idempotency, and a centrally controlled rate limiter.
 
-## 2. Đánh giá theo OWASP Top 10
+Two Critical findings from the initial review were remediated and verified on 2026-08-05:
 
-### A01 — Broken Access Control ✅ Tốt, vài điểm cần lưu ý
-- **User-scoped**: Tất cả service functions filter `.eq("user_id", userId)`; RLS policies 25 cái kín. ✅
-- **Admin routes**: `requireAdmin`/`requireFullAdmin` verify role từ DB trước khi cấp service-role client. ✅
-- **IDOR checkout**: `parseCheckoutBody` **bỏ qua** `body.userId`, resolve từ Bearer token. ✅
-- **⚠️ Vấn đề**: `app/api/workout-plans/route.ts:14` — `planId` được lấy từ query param và truyền vào `fetchWorkoutPlanVersions`. RLS sẽ chặn nhưng nếu RLS bị tắt (debug), sẽ leak dữ liệu user khác.
-- **⚠️ Vấn đề**: `app/api/admin/users/[id]/route.ts:36` — PATCH admin route **xác thực trước, parse body sau**. Body được parse tìm `hasRoleField` để chọn guard. Pattern này an toàn nhưng phức tạp; rủi ro nếu refactor sai.
-- **⚠️ Vấn đề**: `app/api/admin/bulk-actions/route.ts:15-20` — userIds/notificationIds bị cắt bằng `slice(0, MAX_BULK_IDS)` nhưng **không validate UUID format**. Có thể gửi ID tùy ý; service-role sẽ update (RLS bị bypass). ID không tồn tại → no-op, nhưng cần hardening.
+1. **Rate-limit bypass via spoofable client IP headers** — the middleware trusted attacker-controlled `X-Forwarded-For` / `X-Real-IP` headers, letting a client mint new rate-limit buckets at will.
+2. **Premium entitlements gated purely client-side** — `localStorage` could be edited to self-grant premium; the server enforced no plan limits.
 
-**Khuyến nghị**:
-- Validate `id`/`planId` là UUID trước khi query (anti injection qua query parameter).
-- Thêm test explicit cho admin route: user `support` role không được PATCH role.
+No Critical or exploitable-in-production High findings remain. Residual High-severity items are hardening tasks (constant-time signature comparison, CSP nonce migration) rather than known exploitable paths.
 
-### A02 — Cryptographic Failures 🟡 Trung bình
-- **PayOS webhook**: `verifyPayOSWebhookSignature` so sánh `signature === expected` — **non-constant-time**, có thể bị timing attack (lý thuyết, khó khai thác qua mạng). ✅ Có `getPayOSWebhookSignatureCandidates` cho dual format nhưng cả hai cũng non-constant-time.
-- **CRON_SECRET**: `isAuthorizedCron` so sánh `auth === \`Bearer ${expected}\`` — cũng non-constant-time.
-- **Service role key**: Lưu trong env, được dùng trong `createSupabaseServerClient`. CHÚ Ý: `supabaseUrl` fallback `""` nếu thiếu env → client vẫn tạo được nhưng request fail. ✅
-- **JWT**: Supabase Auth xử lý, không tự verify trong app. ✅
+### Risk summary
 
-**Khuyến nghị**:
-- Dùng `crypto.timingSafeEqual` cho signature comparison:
+| Severity | Open | Fixed | Total |
+|----------|------|-------|-------|
+| Critical | 0 | 2 | 2 |
+| High | 2 | 0 | 2 |
+| Medium | 6 | 0 | 6 |
+| Low | 8 | 0 | 8 |
+| **Total** | **16** | **2** | **18** |
+
+---
+
+## 2. Findings Register
+
+| ID | Area | OWASP | Severity | Status |
+|----|------|-------|----------|--------|
+| F-01 | Rate-limit IP spoofing (middleware) | A04 | Critical | Fixed |
+| F-02 | Premium entitlement client-side gating | A01 | Critical | Fixed |
+| F-03 | Webhook/CRON signature comparison not constant-time | A02 | High | Open |
+| F-04 | CSP `'unsafe-inline'` + wildcard Supabase fallback | A05 | High | Open |
+| F-05 | In-memory rate limit (multi-instance) | A04 | Medium | Open |
+| F-06 | Unauthenticated telemetry ingest flood | A04 | Medium | Open |
+| F-07 | No account lockout / weak password policy | A07 | Medium | Open |
+| F-08 | Dual webhook signature candidates | A08 | Medium | Open |
+| F-09 | Missing Docker HEALTHCHECK | A05 | Medium | Open |
+| F-10 | UUID validation on admin bulk IDs | A01 | Low | Open |
+| F-11 | PostgREST `.or()` filter needs fuzz coverage | A03 | Low | Open |
+| F-12 | No dependency audit in CI | A06 | Low | Open |
+| F-13 | Webhook returns 200 on verification failure | A09 | Low | Open |
+| F-14 | User enumeration via auth error messages | A07 | Medium | Open |
+| F-15 | CORS reflects any origin in development | A05 | Low | Open |
+| F-16 | Predictable PayOS `orderCode` | A04 | Low | Open |
+| F-17 | `requireAuth` upserts user row per request | A07 | Low | Open |
+| F-18 | HSTS applied on plain HTTP | A05 | Low | Open |
+
+---
+
+## 3. Detailed Findings (OWASP Top 10)
+
+### 3.1 A01 — Broken Access Control — [F-02 fixed, F-10 open]
+
+- **Passed**: every user-scoped service function filters `.eq("user_id", userId)`; 25 RLS policies cover all user tables.
+- **Passed**: `requireAdmin` / `requireFullAdmin` verify the role from the database *before* granting a service-role client.
+- **Passed**: checkout ignores `body.userId` entirely — the user is resolved from the Bearer token (anti-IDOR).
+- **F-02 [Fixed]**: plan creation limits were enforced only in the browser (`localStorage` entitlement). Server-side guard added: `lib/api/premium-guard.ts` resolves the tier from `billing_entitlements` (via RLS) and enforces `savedPlans = 1` for free tier on `POST /api/workout-plans`, `/api/meal-plans`, `/api/macro-plans`. Covered by `__tests__/lib/premium-guard.test.ts`.
+- **F-10 [Open]**: admin bulk actions truncate ID lists via `slice()` but do not validate UUID format. Non-UUID input is a no-op today, but should be rejected explicitly (defense in depth against RLS-bypass scenarios).
+- **Observation**: the admin PATCH route authenticates before parsing the body to decide the guard variant — safe, but fragile under refactoring; add a regression test asserting a `support`-role user cannot change roles.
+
+### 3.2 A02 — Cryptographic Failures — [F-03 open]
+
+- **Passed**: JWT handling is delegated entirely to Supabase Auth.
+- **F-03 [Open]**: PayOS webhook signature and CRON bearer comparison use direct string equality (non-constant-time). Timing attack over network is theoretical but the fix is trivial:
+
   ```ts
   import { timingSafeEqual } from "crypto";
   const a = Buffer.from(signature ?? "", "hex");
   const b = Buffer.from(expected, "hex");
   return a.length === b.length && timingSafeEqual(a, b);
   ```
-- Rotate `SUPABASE_SERVICE_ROLE_KEY` ngay sau deploy (note trong ARCHITECTURE §9).
 
-### A03 — Injection ✅ Tốt
-- **SQL**: 100% dùng Supabase query builder, không raw SQL, không `.rpc()`. ✅
-- **NoSQL**: Không dùng.
-- **Command**: Docker không shell exec, không `child_process`. ✅
-- **_MAIL/HEADER injection**: Email từ `body.buyerEmail` truyền cho PayOS API — không gửi mail trực tiếp. ✅
-- **⚠️ Vấn đề**: `app/api/admin/users/route.ts:27` — `query.or(\`full_name.ilike.%${q}%,email.ilike.%${q}%\`)`. `q` được chèn vào string PostgREST filter. Supabase SDK escape giá trị, nhưng cần verify. Test: `q = "a%;--"` → xem có break parse không. (Supabase v2 escape bằng single quotes, an toàn.)
+- **Recommendation**: rotate `SUPABASE_SERVICE_ROLE_KEY` after first production deploy.
 
-**Khuyến nghị**: Thêm fuzz test cho `q`: แทร `%`, `'`, `"`, `;`, `--`, `\`, `\\`.
+### 3.3 A03 — Injection — [F-11 open]
 
-### A04 — Insecure Design 🟡 Trung bình
-- **Mock payments**: `isMockAllowed = NODE_ENV !== "production" && ENABLE_MOCK_PAYMENTS === "1"` — chính xác. ✅ Production không mint premium tự do. ✅
-- **Rate limit in-memory**: `bucket = new Map()` trong middleware → **không chạy được multi-instance** (Vercel auto-scale, K8s). Mỗi instance có bucket riêng → attacker gửi tới instance khác = reset limit. (Note trong ARCHITECTURE §9).
-- **Observability POST**: Không auth, không rate-limit per-IP nghiêm ngặt (default 120/min). Có thể flood `observability_events` table → DoS DB. (Note trong ARCHITECTURE §9).
-- **Audit log**: `audit_events` không RLS policy, chỉ service-role truy cập. ✅ Nhưng admin route `/api/admin/audit-logs` đọc cross-user qua service-role → OK vì đã `requireAdmin`.
+- **Passed**: 100% query-builder usage; no raw SQL, no `.rpc()`, no shell execution, no `child_process`.
+- **F-11 [Open]**: the admin user-search filter interpolates `q` into a PostgREST `.or()` string (`app/api/admin/users/route.ts`). The SDK escapes values, but add fuzz coverage for `%`, `'`, `"`, `;`, `--`, `\`, `\\`.
 
-**Khuyến nghị**:
-- Migrate rate-limit sang Redis (Upstash) hoặc edge KV.
-- Giảm rate-limit cho `/api/observability/events` xuống 30/min + payload signature (HMAC với key public client) để giảm spam.
+### 3.4 A04 — Insecure Design — [F-01 fixed, F-05, F-06, F-16 open]
 
-### A05 — Security Misconfiguration 🟡 Trung bình
-- **CSP**: `script-src 'self' 'unsafe-inline'` — **'unsafe-inline' cho Next.js bootstrap**. Comment trong code nói sẽ thay bằng nonce khi CSP move to middleware. 🟡 Hiện tại cho phép XSS nếu có injection vector.
-- **CORS**: `buildCorsHeaders` reflect origin. Nếu `CORS_ALLOWED_ORIGINS` không set và `NODE_ENV=development` → reflect bất kỳ origin. Trong production, nếu `CORS_ALLOWED_ORIGINS` rỗng và `NODE_ENV=production` → **không set CORS headers** → chặn cross-origin. ✅
-- **X-Frame-Options: DENY** + `frame-ancestors 'none'` ✅ clickjacking protected.
-- **HSTS**: `max-age=63072000; includeSubDomains; preload` ✅.
-- **Docker**: Chạy non-root user `nextjs (1001)`. ✅ Không có HEALTHCHECK trong Dockerfile (note trong deployment-patterns skill).
-- **⚠️ Vấn đề**: `next.config.mjs` CSP `connect-src 'self' ${supabaseUrl} https://api-merchant.payos.vn`. Nếu `NEXT_PUBLIC_SUPABASE_URL` không set → fallback `https://*.supabase.co` (wildcard) → mở rộng attack surface (bất kỳ project Supabase nào).
+- **Passed**: mock payments are locked to non-production (`NODE_ENV !== "production" && ENABLE_MOCK_PAYMENTS === "1"`).
+- **Passed**: `audit_events` has no RLS policies — service-role only.
+- **F-01 [Fixed]**: the middleware previously trusted client-set `X-Forwarded-For` / `X-Real-IP` headers, allowing a client to rotate rate-limit buckets. `resolveClientIp(request, trustedProxies)` now defaults to the socket IP and only parses forwarded headers when the direct connection comes from a proxy listed in `TRUSTED_PROXY_IPS`. Covered by `__tests__/app/api/middleware/middleware.test.ts` (spoof-resistance suite).
+- **F-05 [Open]**: rate-limit state is an in-process `Map` — not shared across instances (Vercel auto-scale, K8s). Migrate to Redis / edge KV.
+- **F-06 [Open]**: `/api/observability/events` accepts anonymous POSTs at the default limit (120/min). Reduce to ~30/min or add a lightweight payload signature.
+- **F-16 [Open]**: PayOS `orderCode` derives from a predictable base. Unique constraint `(provider, order_code)` prevents double-processing; add randomness/entropy to the code itself.
 
-**Khuyến nghị**:
-- Bật CSP nonce trong middleware (Next.js 15 hỗ trợ `headers().get('x-nonce')`).
-- Require `NEXT_PUBLIC_SUPABASE_URL` ở build time, không fallback wildcard.
-- Thêm `HEALTHCHECK` vào Dockerfile (đã có trong deployment-patterns skill).
+### 3.5 A05 — Security Misconfiguration — [F-04, F-09, F-15, F-18 open]
 
-### A06 — Vulnerable & Outdated Components 🟢 Cần kiểm tra định kỳ
-- `next: ^15.3.0` — recent.
-- `react: ^19.0.0` — recent.
-- Không có ESLint/Prettier (note trong ARCHITECTURE §9) → không có `npm audit` trong CI.
-- `ecc-universal: ^2.0.0` — third-party, cần audit.
+- **Passed**: `X-Frame-Options: DENY` + `frame-ancestors 'none'` (clickjacking), HSTS preload, strict `Referrer-Policy`, non-root Docker user (1001).
+- **F-04 [Open]**: CSP uses `script-src 'self' 'unsafe-inline'` for Next.js hydration bootstrap, and `connect-src` falls back to `https://*.supabase.co` when `NEXT_PUBLIC_SUPABASE_URL` is unset. Migrate to per-request nonces in middleware and fail the build when the Supabase URL env is missing.
+- **F-09 [Open]**: Docker image lacks a `HEALTHCHECK` directive.
+- **F-15 [Open]**: in development with no `CORS_ALLOWED_ORIGINS`, any origin is reflected. Acceptable for local dev; production requires the env var (behavior verified: empty allow-list + production blocks cross-origin entirely).
+- **F-18 [Open]**: HSTS header is emitted even over plain HTTP. Gate it behind `NODE_ENV === "production"`.
 
-**Khuyến nghị**:
-- Thêm `npm audit --production` vào CI.
-- Pin dependency versions (lock file đã commit).
+### 3.6 A06 — Vulnerable & Outdated Components — [F-12 open]
 
-### A07 — Identification & Authentication Failures 🟡 Trung bình
-- **Supabase Auth**: PKCE, httpOnly cookies (Supabase SSR). ✅
-- **No lockout**: Rate-limit auth = 10/min per-IP — không có account lockout sau N thất bại. Brute force vẫn bị rate-limit nhưng không khóa account.
-- **JWT expiry**: Supabase default 1h access + refresh rotation. ✅
-- **⚠️ Vấn đề**: `requireAuth` trong `lib/api/auth-guard.ts:25-27` `upsert` user row trên mỗi request. Race condition: 2 request concurrent → 2 upsert. Postgres `ON CONFLICT` handle được nhưng có thể throw tạm thời.
+- `next: ^15.3.0`, `react: ^19.0.0` — current.
+- **F-12 [Open]**: no `npm audit` step in CI; add `npm audit --production`. Lockfile is committed (`npm ci` in CI).
 
-**Khuyến nghị**: Thêm account lockout sau 5 thất bại (Supabase Auth có `LOCKED` state).
+### 3.7 A07 — Identification & Authentication Failures — [F-07, F-14, F-17 open]
 
-### A08 — Software & Data Integrity Failures ✅ Tốt
-- **Webhook idempotent**: Terminal-state check + unique constraint `(provider, order_code)`. ✅
-- **Subresource integrity**: Next.js auto-adds SRI cho scripts. ✅
-- **Dependency integrity**: `npm ci` dùng lockfile. ✅
-- **⚠️ Vấn đề**: `getPayOSWebhookSignatureCandidates` chấp nhận **2 signature candidates** (raw body + canonical form) — giảm security: nếu 1 trong 2.verify, webhook accept. Vulnerability surface gấp đôi. Comment cần audit.
+- **Passed**: Supabase Auth with PKCE and httpOnly cookies; 1h access tokens with refresh rotation.
+- **F-07 [Open]**: no account lockout after N failed attempts (auth rate limit is 10/min per IP — slows but does not lock brute force).
+- **F-14 [Open]**: login/signup error text distinguishes existing vs. non-existing emails (user enumeration). Use a generic message for both cases.
+- **F-17 [Open]**: `requireAuth` upserts a `users` row on every request. The `ON CONFLICT` path is safe, but under concurrency it can surface transient errors; move to insert-on-first-signup only.
 
-**Khuyến nghị**: PayOS docs chỉ dùng 1 dạng signature. Xác nhận với PayOS support candidate nào là chính thống, bỏ candidate còn lại.
+### 3.8 A08 — Software & Data Integrity Failures — [F-08 open]
 
-### A09 — Security Logging & Monitoring Failures ✅ Tốt
-- `audit_events` immutable, chỉ service-role write. ✅
-- Tất cả admin mutation + webhook đều log. ✅
-- Observability ingest có `runtime_error`, `api_error`. ✅
-- **⚠️ Vấn đề**: Log ship đến PayOS API (`https://api-merchant.payos.vn`) qua `console.error` ở webhook:67 disclose IP — IP public, không nhạy cảm. ✅
-- **⚠️ Vấn đề**: `app/api/billing/webhook/route.ts:67` return `jsonSuccess({ received: false, verified: false })` với status 200 → **trả 200 dù verify fail**. Đây là **anti-pattern**: PayOS sẽ hiểu 200 = success và không retry. Tốt cho anti-replay nhưng tấn công có thể spam để dò signature. Rate-limit `webhook: 120/min` đủ chặn.
+- **Passed**: webhook idempotency via terminal-state check + unique constraint `(provider, order_code)`; SRI auto-added by Next.js; dependency integrity via lockfile.
+- **F-08 [Open]**: `getPayOSWebhookSignatureCandidates` accepts two signature candidates (raw body + canonical form) — the webhook verifies if *either* matches. Confirm the canonical form with PayOS and remove the other candidate to halve the verification surface.
 
-**Khuyến nghị**: Return 401 thay vì 200 khi `verified: false` (nhưng test xem PayOS có retry轰炸 không).
+### 3.9 A09 — Security Logging & Monitoring Failures — [F-13 open]
 
-### A10 — Server-Side Request Forgery (SSRF) ✅ Tốt
-- Không có endpoint nào fetch URL từ user input.
-- `createPayOSPayment` gọi fixed `https://api-merchant.payos.vn`. ✅
-- CSP `connect-src` giới hạn whitelist. ✅
+- **Passed**: `audit_events` immutable and service-role-only; every admin mutation and webhook processing writes an audit event; telemetry covers `runtime_error` / `api_error`.
+- **F-13 [Open]**: webhook returns `200` even when signature verification fails. The current behavior is a deliberate anti-replay choice (no PayOS retry storm), but it lets attackers probe signatures without triggering retries. Decide explicitly: return `401` and accept retries, or keep `200` and document why. Rate limit (120/min webhook bucket) mitigates probing.
 
-## 3. Tổng kết Severities
+### 3.10 A10 — Server-Side Request Forgery — Passed
 
-| Severity | Số | Mục |
-|----------|----|-----|
-| 🔴 Critical | 0 | (Sau khi fix các issue từ `critical-security-remediation` spec) |
-| 🟠 High | 2 | A02 timing attack (signature), A05 CSP unsafe-inline + supabaseUrl wildcard |
-| 🟡 Medium | 5 | A04 rate-limit multi-instance, A04 observability spam, A07 no lockout, A08 dual signature candidates, A05 missing healthcheck |
-| 🟢 Low | 4 | A01 UUID validation, A03 PostgREST filter fuzz, A06 dependency audit, A09 webhook 200 on verify fail |
+- No endpoint fetches user-supplied URLs; `createPayOSPayment` targets a fixed host; CSP `connect-src` is whitelist-based.
 
-## 4. Bề mặt tấn công trực quan cho Lab
+---
 
-```
-                          ┌─────────────────────────────┐
-                          │  Attacker (Kali container)   │
-                          │  Burp/ZAP/nuclei/sqlmap      │
-                          └────────────┬────────────────┘
-                                       │ http://target:3000
-                                       ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  TARGET: FitBudget container (Next.js standalone)               │
-│  ├─ /api/public/*        ► IDOR, input validation, fuzz         │
-│  ├─ /api/observability   ► No-auth spam, table flooding         │
-│  ├─ /api/billing/*      ► Webhook replay, HMAC bypass try       │
-│  ├─ /api/admin/*         ► Auth bypass, role escalation         │
-│  ├─ /api/workout-logs    ► IDOR (userId từ token, planId URL)   │
-│  └─ Middleware           ► Rate-limit bypass (multi-IP)        │
-└─────────────────────────────────────────────────────────────────┘
-                                       │
-                                       ▼ service-role (bypass RLS)
-┌─────────────────────────────────────────────────────────────────┐
-│  Supabase local (Postgres + PostgREST + GoTrue)                 │
-│  ├─ RLS policies (25)   ► Try bypass                            │
-│  ├─ users.role REVOKE    ► Privilege escalation attempt          │
-│  └─ audit_events (no policy) ► Direct access denial             │
-└─────────────────────────────────────────────────────────────────┘
+## 4. Security Controls in Place
+
+| Control | Implementation |
+|---------|----------------|
+| Authentication | Supabase Auth — JWT Bearer, PKCE, httpOnly cookies |
+| Authorization | 25 RLS policies + `requireAuth` / `requireAdmin` guards (role re-verified from DB per request) |
+| Privilege escalation prevention | Column-level `REVOKE` on `users.role` + PG trigger `guard_user_role` |
+| IDOR prevention | User-scoped queries in all services; checkout ignores client-provided userId |
+| Premium enforcement | Server-side guard (`lib/api/premium-guard.ts`) with RLS-backed entitlement lookup |
+| Webhook security | HMAC-SHA256 signature + terminal-state idempotency + unique constraint |
+| Rate limiting | Tiered token bucket in middleware (auth 10/min, billing 8/min, admin 60/min, webhook 120/min) |
+| Client IP resolution | Socket IP only; forwarded headers honored solely from `TRUSTED_PROXY_IPS` |
+| Error sanitization | 5xx → generic message; centralized `handleApiError` |
+| Audit logging | `audit_events` (immutable, service-role-only) on all admin mutations + webhook processing |
+| Input validation | `assertRequestBody`, `requireString`, `requireNumber`, `clampString`, `isAllowedValue` (whitelist) |
+| Secrets management | `.env.local` gitignored; automated secret scan: `npm run security:secrets` |
+
+---
+
+## 5. Public Attack Surface
+
+Unauthenticated endpoints (starting points for review / pentest):
+
+- `GET /api/workout-templates`, `POST /api/workout`, `POST /api/meal`, `POST /api/macro` — public calculators
+- `POST /api/observability/events` — telemetry ingest (anonymous allowed)
+- `POST /api/billing/webhook` — PayOS webhook
+- `POST /api/notifications/cron` — bearer-protected cron
+- `/.well-known/security.txt`, `/robots.txt`
+
+Authenticated surface: workout/meal/macro plan CRUD + versioning, workout sessions & set logs, progress, analytics, notifications, reminders, settings, billing (entitlement/checkout/cancel/history) — all behind RLS. Admin surface: 9 endpoints behind `requireAdmin` with service-role access.
+
+---
+
+## 6. Remediation Roadmap
+
+| Priority | Items | Target |
+|----------|-------|--------|
+| P0 (next release) | F-03 constant-time compare, F-04 CSP nonce + env fail-fast | Immediate |
+| P1 (short term) | F-07 lockout, F-14 enumeration, F-08 single signature candidate, F-06 telemetry limit | 1–2 weeks |
+| P2 (medium term) | F-05 Redis rate limit, F-09 HEALTHCHECK, F-10 UUID validation, F-11 fuzz tests, F-17 upsert cleanup | 1–2 months |
+| P3 (backlog) | F-12 CI dependency audit, F-13 webhook status semantics, F-15 CORS dev policy, F-16 orderCode entropy, F-18 HSTS gating | Ongoing |
+
+---
+
+## 7. Verification Commands
+
+```bash
+npm run typecheck                # TypeScript type gate
+npm test                         # 240 tests / 31 suites
+npm run security:secrets         # Repository secret scan
+npm run security:supabase-bootstrap  # RLS / bootstrap verification
+npm run build                    # Production build (standalone)
 ```
 
-## 5. Tools đề xuất cho Lab
+---
 
-| Tool | Mục đích | Cài đặt |
-|------|---------|---------|
-| **Burp Suite Community** | Proxy + Repeater + Intruder | `kali linux` full image |
-| **OWASP ZAP** | Automated scan, baseline + full | `apt install zaproxy` |
-| **nuclei** | Template-based vuln scan | `go install github.com/projectdiscovery/nuclei` |
-| **sqlmap** | SQL injection (qua PostgREST filter) | `apt install sqlmap` |
-| **ffuf** | Fuzz endpoint, IDOR ID | `go install github.com/ffuf/ffuf` |
-| **jwt_tool** | JWT analysis, alg confusion | `pipx install jwt_tool` |
-| **Postman/Newman** | Webhook replay, custom HMAC | `npm i -g newman` |
-| **Supabase local CLI** | DB direct, RLS testing | `npm i -g supabase` |
+## 8. References
 
-## 6. Tài liệu tham chiếu
-
-- OWASP Top 10 2021: https://owasp.org/Top10/
+- OWASP Top 10 (2021): https://owasp.org/Top10/
 - OWASP ASVS 4.0: https://owasp.org/www-project-application-security-verification-standard/
-- Supabase RLS docs: https://supabase.com/docs/guides/auth/row-level-security
-- PayOS webhook docs: https://payos.vn/docs/
-- Next.js CSP: https://nextjs.org/docs/app/building-your-application/configuring/content-security-policy
-
-## 7. Changelog fix (phát hiện trong scan "có lỗi cơ bản")
-
-| Ngày | Vấn đề | Severity | Fix | Verify |
-|------|--------|----------|-----|--------|
-| 2026-08-05 | Rate-limit bypass qua header spoof `X-Forwarded-For`/`X-Real-IP` (`middleware.ts` tin header client tự đặt → attacker tự tạo bucket mới) | 🔴 Critical | `resolveClientIp(request, trustedProxies)`: mặc định chỉ tin socket IP (`request.ip`); chỉ duyệt `X-Forwarded-For` từ phải sang trái (bỏ qua hop trusted) và `X-Real-IP` khi kết nối trực tiếp từ proxy trong `TRUSTED_PROXY_IPS` | `__tests__/app/api/middleware/middleware.test.ts` (describe "getClientIp (spoof resistance)") |
-| 2026-08-05 | Premium gating 100% client-side: `use-entitlement.ts` đọc `localStorage` (`fitbudget-entitlement`) — user sửa localStorage để đổi tier, server không enforce giới hạn | 🔴 Critical | Server-side guard: `lib/api/premium-guard.ts` (`resolveUserTier` từ `billing_entitlements`, `assertSavedPlanLimit` count qua RLS); wire vào `POST /api/workout-plans`, `/api/meal-plans`, `/api/macro-plans`; client chỉ còn hiển thị, không quyết định quyền | `__tests__/lib/premium-guard.test.ts` |
-
-Còn lại chưa fix (chờ duyệt): A07 user enumeration qua `friendlyAuthMessage`, CORS dev reflect, PostgREST `.or()` filter trong `app/api/admin/users/route.ts`, password policy yếu + không lockout, `orderCode` đoán được, `requireAuth` upsert thừa, HSTS trên HTTP.
+- Supabase Row Level Security: https://supabase.com/docs/guides/auth/row-level-security
+- PayOS webhook documentation: https://payos.vn/docs/
+- Next.js Content Security Policy: https://nextjs.org/docs/app/building-your-application/configuring/content-security-policy
